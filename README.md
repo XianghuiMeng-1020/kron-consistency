@@ -67,7 +67,7 @@ Seeds, fractions, and processor coefficients are frozen in the scripts. Do not e
 | Â² | two-hop normalized adjacency | Outside the theorem |
 | Cheb-2 | 0.5 T₀ + 0.35 T₁ + 0.15 T₂ on L̃ = L<sub>sym</sub> − I | Outside the theorem; λ<sub>max</sub> = 2 |
 
-Series refinement replaces a selected original edge of conductance $w$ by a degree-2 node with conductances $2w,\,2w$. That operation preserves the Kron map on the original vertices. For the operator-level checks, every original vertex is a boundary vertex, so $T_\Phi(G)=\Phi_G$. The reported statistic
+Series refinement replaces a selected original edge of conductance $w$ by a degree-2 node with conductances $2w$ and $2w$. That operation preserves the Kron map on the original vertices. For the operator-level checks, every original vertex is a boundary vertex, so $T_\Phi(G)=\Phi_G$. The reported statistic
 
 $$
 \delta_F=\frac{\lVert S\Phi_{G'}E-\Phi_G\rVert_F}{\lVert\Phi_G\rVert_F}
