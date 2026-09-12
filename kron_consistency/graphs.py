@@ -12,10 +12,8 @@ from typing import List, Optional, Tuple
 
 import numpy as np
 
-ROOT = Path(__file__).resolve().parent
-IEEE_DIR = ROOT / "data" / "ieee"
-TRAFFIC_DIR = ROOT / "data" / "traffic"
-PLANETOID = ROOT / "data" / "planetoid"
+from kron_consistency.paths import IEEE_DIR, PLANETOID_DIR, TRAFFIC_DIR
+
 EPS = 1e-12
 
 
@@ -112,7 +110,7 @@ def _try_pickle_adj(path: Path) -> Optional[np.ndarray]:
 def load_cora() -> Graph:
     from torch_geometric.datasets import Planetoid
 
-    data = Planetoid(root=str(PLANETOID), name="Cora")[0]
+    data = Planetoid(root=str(PLANETOID_DIR), name="Cora")[0]
     n = int(data.num_nodes)
     ei = data.edge_index.cpu().numpy()
     W = np.zeros((n, n))
@@ -121,7 +119,10 @@ def load_cora() -> Graph:
 
 
 def load_graphs() -> Tuple[List[Graph], dict]:
-    graphs = [load_matpower_case(IEEE_DIR / f"{c}.m") for c in ("case14", "case30", "case57", "case118", "case300")]
+    graphs = [
+        load_matpower_case(IEEE_DIR / f"{c}.m")
+        for c in ("case14", "case30", "case57", "case118", "case300")
+    ]
     for fname, label in (
         ("adj_mx_METR-LA.pkl", "METR-LA"),
         ("adj_mx_PEMS-BAY.pkl", "PEMS-BAY"),

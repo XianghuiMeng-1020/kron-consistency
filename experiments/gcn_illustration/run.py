@@ -14,6 +14,7 @@ import hashlib
 import json
 import platform
 import time
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -25,9 +26,13 @@ from scipy.stats import wilcoxon
 from torch_geometric.datasets import Planetoid
 from torch_geometric.nn import GCNConv
 
-ROOT = Path(__file__).resolve().parent
-DATA_ROOT = ROOT / "data" / "planetoid"
-OUT_JSON = ROOT / "results" / "gcn_illustration.json"
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT))
+
+from kron_consistency.paths import PLANETOID_DIR, RESULTS_DIR  # noqa: E402
+
+DATA_ROOT = PLANETOID_DIR
+OUT_JSON = RESULTS_DIR / "gcn_illustration.json"
 
 SEEDS = list(range(10))
 FRACS = (0.00, 0.01, 0.05, 0.10, 0.25)

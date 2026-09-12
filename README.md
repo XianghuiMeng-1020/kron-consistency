@@ -18,17 +18,24 @@ A map $q(L_K)$ applied *after* reduction is consistent by construction. The theo
 
 ---
 
-## Contents
+## Layout
 
-| File | Role |
-| --- | --- |
-| `theory.py` | Kron / series algebra used in the identities |
-| `witnesses.py` | Analytic witnesses (two-terminal split; triangle series) |
-| `operator_defect.py` | Signal-independent map defect δ<sub>F</sub> under series refinement |
-| `kron_elimination.py` | Exact Kron elimination of original vertices |
-| `gcn_illustration.py` | Frozen two-layer GCN on Cora at test time |
-| `graphs.py` | Loaders for the eight public graphs |
-| `data/` | MATPOWER cases and DCRNN traffic adjacencies |
+```
+kron_consistency/          library
+  theory.py                Kron / series algebra
+  graphs.py                IEEE, traffic, and Cora loaders
+  operators.py             frozen processors and sparse primitives
+  series.py                series refinement, harmonic lift E, Schur on inserted nodes
+  kron.py                  exact Kron elimination of original vertices
+  config.py                frozen seeds, fractions, coefficients
+experiments/
+  identities/run.py        executable identities behind the theorem
+  witnesses/run.py         Table 1 (two-terminal split; triangle series)
+  operator_defect/run.py   Table 2, series refinement, δ_F
+  kron_elimination/run.py  Kron elimination of original vertices
+  gcn_illustration/run.py  frozen Cora GCN at test time
+data/                      MATPOWER cases and DCRNN adjacencies
+```
 
 Cora is downloaded on first use via Planetoid. Generated JSON is written to `results/` and is not part of the repository.
 
@@ -42,17 +49,18 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-`operator_defect.py` and `kron_elimination.py` need PyTorch Geometric only to load Cora. `gcn_illustration.py` trains on CPU.
+The operator-level scripts need PyTorch Geometric only to load Cora. The GCN illustration trains on CPU.
 
 ---
 
 ## Reproduction
 
 ```bash
-python witnesses.py
-python operator_defect.py
-python kron_elimination.py
-python gcn_illustration.py
+python experiments/identities/run.py
+python experiments/witnesses/run.py
+python experiments/operator_defect/run.py
+python experiments/kron_elimination/run.py
+python experiments/gcn_illustration/run.py
 ```
 
 Seeds, fractions, and processor coefficients are frozen in the scripts. Do not edit them after seeing output.

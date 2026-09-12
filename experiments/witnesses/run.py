@@ -6,9 +6,15 @@ under harmonic lifting. Cheb-2 uses lambda_max = 2.
 """
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
 import numpy as np
 
-from theory import (
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT))
+
+from kron_consistency.theory import (  # noqa: E402
     S_g_E,
     gcn_mat,
     laplacian,

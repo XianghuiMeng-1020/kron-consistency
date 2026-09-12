@@ -10,424 +10,57 @@ Refinements are nested prefixes of a seed-wise permutation of ORIGINAL
 undirected edges. Each selected edge of conductance w is replaced by a
 unique degree-2 node with conductances 2w, 2w.
 
-Do not edit this script's coefficients after seeing results.
+Do not edit the frozen coefficients in kron_consistency.config after seeing results.
 """
 from __future__ import annotations
 
 import json
-import platform
 import sys
 import time
 from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
-from scipy import sparse
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from graphs import load_graphs  # noqa: E402
+from kron_consistency.config import (  # noqa: E402
+    FRACS,
+    HARM_SEED,
+    KRON_ATOL,
+    NON_AFFINE,
+    PROCESSORS,
+    SEEDS,
+)
+from kron_consistency.graphs import load_graphs  # noqa: E402
+from kron_consistency.operators import (  # noqa: E402
+    canonicalize_sparse,
+    defect_record,
+    iqr_summary,
+    laplacian,
+    maxabs,
+    processor_defs,
+    processor_matrix,
+    residual_pair,
+    software_versions,
+    summarize,
+    to_csr_adj,
+    undirected_edges,
+)
+from kron_consistency.paths import RESULTS_DIR  # noqa: E402
+from kron_consistency.series import (  # noqa: E402
+    W_from_laplacian,
+    build_E,
+    collapse_to_original,
+    graph_stats,
+    harmonicity,
+    refine_graph,
+    refinement_counts,
+    schur_onto_original,
+)
 
-OUT_JSON = Path(__file__).resolve().parent / "results" / (Path(__file__).stem + ".json")
-
-SEEDS = [0, 1, 2, 3, 4]
-FRACS = [0.00, 0.01, 0.05, 0.10, 0.25]
-ALPHA_AFF = 0.15
-ALPHA_QUAD = 0.08
-CHEB_C = (0.5, 0.35, 0.15)
-KRON_ATOL = 1e-8
-SPECTRAL_N_MAX = 400
-HARM_PROBES = 4
-HARM_SEED = 20260911
-
-PROCESSORS = ("affine", "quadratic", "rw2", "norm2", "cheb2")
-NON_AFFINE = ("quadratic", "rw2", "norm2", "cheb2")
-
-
-def software_versions() -> dict:
-    import scipy
-
-    return {
-        "python": platform.python_version(),
-        "platform": platform.platform(),
-        "numpy": np.__version__,
-        "scipy": scipy.__version__,
-        "machine": platform.machine(),
-        "processor": platform.processor(),
-    }
-
-
-def canonicalize_sparse(A) -> sparse.csr_matrix:
-    if not sparse.issparse(A):
-        A = sparse.csr_matrix(np.asarray(A, dtype=np.float64))
-    else:
-        A = A.tocsr().astype(np.float64, copy=True)
-    A.sum_duplicates()
-    A.eliminate_zeros()
-    A.sort_indices()
-    return A
-
-
-def to_csr_adj(W) -> sparse.csr_matrix:
-    A = canonicalize_sparse(W)
-    A.setdiag(0.0)
-    A.eliminate_zeros()
-    A = 0.5 * (A + A.T)
-    return canonicalize_sparse(A)
-
-
-def undirected_edges(W: sparse.csr_matrix):
-    A = sparse.triu(W, k=1).tocoo()
-    A.sum_duplicates()
-    order = np.lexsort((A.col, A.row))
-    i = A.row[order].astype(np.int64)
-    j = A.col[order].astype(np.int64)
-    w = A.data[order].astype(np.float64)
-    return i, j, w
-
-
-def laplacian(W: sparse.csr_matrix) -> sparse.csr_matrix:
-    W = canonicalize_sparse(W)
-    d = np.asarray(W.sum(axis=1)).ravel()
-    L = sparse.diags(d) - W
-    return canonicalize_sparse(L)
-
-
-def fro_norm(A: sparse.spmatrix) -> float:
-    A = A.tocsr()
-    A.sum_duplicates()
-    if A.nnz == 0:
-        return 0.0
-    return float(np.linalg.norm(A.data))
-
-
-def maxabs(A: sparse.spmatrix) -> float:
-    A = A.tocsr()
-    A.sum_duplicates()
-    if A.nnz == 0:
-        return 0.0
-    return float(np.max(np.abs(A.data)))
-
-
-def spectral_rel(D: sparse.spmatrix, T: sparse.spmatrix, n: int):
-    if n > SPECTRAL_N_MAX:
-        return None
-    Dd = D.toarray()
-    Td = T.toarray()
-    n2_t = float(np.linalg.norm(Td, 2))
-    n2_d = float(np.linalg.norm(Dd, 2))
-    return {
-        "abs_2": n2_d,
-        "delta_2": (n2_d / n2_t) if n2_t > 0 else float("nan"),
-    }
-
-
-def refinement_counts(m: int) -> list:
-    counts = []
-    prev = 0
-    for f in FRACS:
-        if f <= 0.0:
-            k = 0
-        else:
-            k = int(round(f * m))
-            if m >= 1:
-                k = max(1, k)
-            k = min(int(m), k)
-        k = max(k, prev)
-        counts.append(int(k))
-        prev = k
-    return counts
-
-
-def refine_graph(n: int, ei, ej, ew, split_idx: np.ndarray):
-    split = set(int(x) for x in split_idx.tolist())
-    rows: list[int] = []
-    cols: list[int] = []
-    data: list[float] = []
-    inserted = []
-    for k in range(int(ei.size)):
-        i = int(ei[k])
-        j = int(ej[k])
-        w = float(ew[k])
-        if k in split:
-            inserted.append((i, j, w))
-        else:
-            rows.extend((i, j))
-            cols.extend((j, i))
-            data.extend((w, w))
-    n_new = len(inserted)
-    n_full = n + n_new
-    for t, (i, j, w) in enumerate(inserted):
-        z = n + t
-        ww = 2.0 * w
-        rows.extend((i, z, j, z))
-        cols.extend((z, i, z, j))
-        data.extend((ww, ww, ww, ww))
-    W = sparse.csr_matrix(
-        (np.asarray(data, dtype=np.float64),
-         (np.asarray(rows, dtype=np.int64), np.asarray(cols, dtype=np.int64))),
-        shape=(n_full, n_full),
-        dtype=np.float64,
-    )
-    return canonicalize_sparse(W), inserted
-
-
-def build_E(n: int, inserted) -> sparse.csr_matrix:
-    n_full = n + len(inserted)
-    rows = list(range(n))
-    cols = list(range(n))
-    data = [1.0] * n
-    for t, (i, j, _w) in enumerate(inserted):
-        z = n + t
-        rows.extend((z, z))
-        cols.extend((i, j))
-        data.extend((0.5, 0.5))
-    E = sparse.csr_matrix(
-        (np.asarray(data, dtype=np.float64),
-         (np.asarray(rows, dtype=np.int64), np.asarray(cols, dtype=np.int64))),
-        shape=(n_full, n),
-        dtype=np.float64,
-    )
-    return canonicalize_sparse(E)
-
-
-def schur_onto_original(L: sparse.csr_matrix, n_b: int) -> sparse.csr_matrix:
-    """Kron / DtN on the original nodes. Uses the diagonal interior block. No ridge."""
-    L = canonicalize_sparse(L)
-    if L.shape[0] == n_b:
-        return L
-    L_bb = L[:n_b, :n_b]
-    L_bi = L[:n_b, n_b:]
-    L_ib = L[n_b:, :n_b]
-    L_ii = L[n_b:, n_b:]
-    off = L_ii.copy()
-    off.setdiag(0.0)
-    off.eliminate_zeros()
-    if off.nnz != 0:
-        raise RuntimeError(
-            f"L_II is not diagonal: nnz_off={off.nnz}, maxabs={maxabs(off)}"
-        )
-    diag = np.asarray(L_ii.diagonal()).ravel()
-    if np.any(diag <= 0):
-        raise RuntimeError("L_II diagonal is not strictly positive")
-    inv = 1.0 / diag
-    corr = L_bi @ sparse.diags(inv) @ L_ib
-    return canonicalize_sparse(L_bb - corr)
-
-
-def residual_pair(A: sparse.spmatrix, B: sparse.spmatrix) -> dict:
-    D = canonicalize_sparse(A) - canonicalize_sparse(B)
-    D = D.tocsr()
-    D.sum_duplicates()
-    return {
-        "frobenius": fro_norm(D),
-        "maxabs": maxabs(D),
-        "nnz": int(D.nnz),
-        "exactly_zero": bool(D.nnz == 0 or maxabs(D) == 0.0),
-    }
-
-
-def random_walk(W: sparse.csr_matrix) -> sparse.csr_matrix:
-    d = np.asarray(W.sum(axis=1)).ravel()
-    invd = np.zeros_like(d)
-    nz = d > 0.0
-    invd[nz] = 1.0 / d[nz]
-    return canonicalize_sparse(sparse.diags(invd) @ W)
-
-
-def ahat(W: sparse.csr_matrix) -> sparse.csr_matrix:
-    n = W.shape[0]
-    Wt = canonicalize_sparse(W + sparse.eye(n, dtype=np.float64, format="csr"))
-    d = np.asarray(Wt.sum(axis=1)).ravel()
-    dinv = 1.0 / np.sqrt(np.maximum(d, 0.0))
-    return canonicalize_sparse(sparse.diags(dinv) @ Wt @ sparse.diags(dinv))
-
-
-def ltilde(W: sparse.csr_matrix) -> sparse.csr_matrix:
-    """L_sym - I with lambda_max = 2 fixed, i.e. -D^{-1/2} W D^{-1/2}."""
-    d = np.asarray(W.sum(axis=1)).ravel()
-    dinv = np.zeros_like(d)
-    nz = d > 0.0
-    dinv[nz] = 1.0 / np.sqrt(d[nz])
-    nrm = sparse.diags(dinv) @ W @ sparse.diags(dinv)
-    return canonicalize_sparse(-nrm)
-
-
-def processor_matrix(name: str, W: sparse.csr_matrix) -> sparse.csr_matrix:
-    n = W.shape[0]
-    I = sparse.eye(n, dtype=np.float64, format="csr")
-    if name == "affine":
-        L = laplacian(W)
-        return canonicalize_sparse(I - ALPHA_AFF * L)
-    if name == "quadratic":
-        L = laplacian(W)
-        return canonicalize_sparse(I - ALPHA_QUAD * L + 0.5 * (ALPHA_QUAD ** 2) * (L @ L))
-    if name == "rw2":
-        P = random_walk(W)
-        return canonicalize_sparse(P @ P)
-    if name == "norm2":
-        A = ahat(W)
-        return canonicalize_sparse(A @ A)
-    if name == "cheb2":
-        Lt = ltilde(W)
-        t0 = I
-        t1 = Lt
-        t2 = canonicalize_sparse(2.0 * (Lt @ Lt) - t0)
-        c0, c1, c2 = CHEB_C
-        return canonicalize_sparse(c0 * t0 + c1 * t1 + c2 * t2)
-    raise KeyError(name)
-
-
-def processor_defs() -> dict:
-    return {
-        "affine": {
-            "formula": "I - 0.15 L",
-            "role": "negative_control",
-            "class": "affine_combinatorial_laplacian",
-        },
-        "quadratic": {
-            "formula": "I - 0.08 L + 0.5*(0.08)^2 L^2",
-            "role": "primary",
-            "class": "quadratic_combinatorial_laplacian",
-        },
-        "rw2": {
-            "formula": "P^2, P = D^{-1} W; zero-degree rows of P are 0",
-            "role": "primary",
-            "class": "two_hop_random_walk",
-        },
-        "norm2": {
-            "formula": "Ahat^2, Ahat = Dtilde^{-1/2}(W+I)Dtilde^{-1/2}",
-            "role": "primary",
-            "label": "two-hop GCN normalization / fixed two-hop normalized propagation",
-            "class": "two_hop_normalized_adjacency",
-            "not": "trained_GCN",
-        },
-        "cheb2": {
-            "formula": "0.5 T0 + 0.35 T1 + 0.15 T2 on L_tilde = L_sym - I, lambda_max=2 fixed",
-            "role": "optional_fixed",
-            "class": "fixed_chebyshev2_propagation",
-            "lambda_max": 2.0,
-        },
-    }
-
-
-def graph_stats(name: str, W: sparse.csr_matrix, source: dict) -> dict:
-    n = W.shape[0]
-    ei, ej, ew = undirected_edges(W)
-    d = np.asarray(W.sum(axis=1)).ravel()
-    n_comp = int(sparse.csgraph.connected_components(W, directed=False, return_labels=False))
-    return {
-        "name": name,
-        "n_nodes": int(n),
-        "n_undirected_edges": int(ei.size),
-        "n_components": n_comp,
-        "min_degree": float(d.min()) if n else 0.0,
-        "max_degree": float(d.max()) if n else 0.0,
-        "n_zero_degree": int(np.sum(d <= 0.0)),
-        "weight_min": float(ew.min()) if ei.size else 0.0,
-        "weight_max": float(ew.max()) if ei.size else 0.0,
-        "symmetric": bool((W - W.T).nnz == 0 or maxabs(W - W.T) == 0.0),
-        "diag_zero": bool(np.all(W.diagonal() == 0.0)),
-        "source": source,
-        "refinement_counts": {
-            f"{int(f * 100) if f else 0}%": k
-            for f, k in zip(FRACS, refinement_counts(int(ei.size)))
-        },
-    }
-
-
-def summarize(vals) -> dict:
-    a = np.asarray(list(vals), dtype=np.float64)
-    if a.size == 0:
-        return {"median": None, "mean": None, "std": None, "min": None, "max": None, "n": 0}
-    return {
-        "median": float(np.median(a)),
-        "mean": float(np.mean(a)),
-        "std": float(np.std(a, ddof=1)) if a.size > 1 else 0.0,
-        "min": float(np.min(a)),
-        "max": float(np.max(a)),
-        "n": int(a.size),
-    }
-
-
-def iqr_summary(vals) -> dict:
-    a = np.asarray(list(vals), dtype=np.float64)
-    q1, q3 = np.percentile(a, [25.0, 75.0])
-    s = summarize(a)
-    s.update({
-        "iqr": float(q3 - q1),
-        "q25": float(q1),
-        "q75": float(q3),
-        "graph_medians": [float(x) for x in a],
-    })
-    return s
-
-
-def collapse_to_original(n: int, W_full: sparse.csr_matrix, inserted) -> sparse.csr_matrix:
-    W_b = canonicalize_sparse(W_full[:n, :n])
-    if not inserted:
-        return W_b
-    rows = []
-    cols = []
-    data = []
-    for i, j, w in inserted:
-        rows.extend((i, j))
-        cols.extend((j, i))
-        data.extend((float(w), float(w)))
-    extra = sparse.csr_matrix(
-        (np.asarray(data, dtype=np.float64),
-         (np.asarray(rows, dtype=np.int64), np.asarray(cols, dtype=np.int64))),
-        shape=(n, n),
-        dtype=np.float64,
-    )
-    return canonicalize_sparse(W_b + extra)
-
-
-def W_from_laplacian(L: sparse.csr_matrix) -> sparse.csr_matrix:
-    W = canonicalize_sparse(-L)
-    W.setdiag(0.0)
-    return canonicalize_sparse(W)
-
-
-def defect_record(T_r: sparse.csr_matrix, T_o: sparse.csr_matrix, n: int) -> dict:
-    D = canonicalize_sparse(T_r) - canonicalize_sparse(T_o)
-    D = D.tocsr()
-    D.sum_duplicates()
-    nF = fro_norm(T_o)
-    dF = fro_norm(D)
-    rec = {
-        "delta_F": (dF / nF) if nF > 0 else float("nan"),
-        "abs_F": dF,
-        "maxabs": maxabs(D),
-        "nnz_D": int(D.nnz),
-        "norm_F_T": nF,
-    }
-    spec = spectral_rel(D, T_o, n)
-    if spec is not None:
-        rec.update(spec)
-    return rec
-
-
-def harmonicity(L: sparse.csr_matrix, E: sparse.csr_matrix, n: int, rng: np.random.Generator) -> dict:
-    n_i = L.shape[0] - n
-    if n_i <= 0:
-        return {"n_probes": 0, "maxabs_interior": 0.0, "rms_interior": 0.0}
-    worst = 0.0
-    rss = 0.0
-    n_ent = 0
-    for _ in range(HARM_PROBES):
-        x = rng.normal(size=n)
-        r = L @ (E @ x)
-        interior = np.asarray(r).ravel()[n:]
-        worst = max(worst, float(np.max(np.abs(interior))) if interior.size else 0.0)
-        rss += float(np.sum(interior * interior))
-        n_ent += interior.size
-    return {
-        "n_probes": HARM_PROBES,
-        "maxabs_interior": worst,
-        "rms_interior": float(np.sqrt(rss / max(n_ent, 1))),
-    }
+OUT_JSON = RESULTS_DIR / "operator_defect.json"
 
 
 def main() -> dict:
@@ -735,7 +368,7 @@ def main() -> dict:
         },
         "library_versions": software_versions(),
         "runtime_sec": elapsed,
-        "reproduction": "python3 operator_defect.py",
+        "reproduction": "python experiments/operator_defect/run.py",
     }
     OUT_JSON.parent.mkdir(parents=True, exist_ok=True)
     OUT_JSON.write_text(json.dumps(payload, indent=2))
