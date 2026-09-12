@@ -1,0 +1,9 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+results/
+data/planetoid/
+.DS_Store
+*.egg-info/
+.ipynb_checkpoints/
